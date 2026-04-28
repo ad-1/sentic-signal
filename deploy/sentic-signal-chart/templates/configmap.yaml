@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sentic-signal.fullname" . }}-config
+data:
+  TICKERS: {{ .Values.config.tickers | quote }}
+  NEWS_LOOKBACK_MINUTES: {{ .Values.config.newsLookbackMinutes | quote }}
+  NEWS_RELEVANCE_THRESHOLD: {{ .Values.config.newsRelevanceThreshold | quote }}
+  YAHOO_RSS_ENABLED: {{ .Values.config.yahooRssEnabled | quote }}
+  RABBITMQ_HOST: {{ .Values.rabbitmq.host | quote }}
+  RABBITMQ_PORT: {{ .Values.rabbitmq.port | quote }}
+  RABBITMQ_QUEUE: {{ .Values.rabbitmq.queue | quote }}

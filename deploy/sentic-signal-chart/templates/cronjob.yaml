@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sentic-signal.fullname" . }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: {{ .Chart.Name }}
+            image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            envFrom:
+              # Non-secret config from ConfigMap (rendered from values.yaml)
+              - configMapRef:
+                  name: {{ include "sentic-signal.fullname" . }}-config
+            env:
+              # Secrets injected individually from Kubernetes Secret
+              - name: ALPHA_VANTAGE_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: sentic-signal-secrets
+                    key: alpha-vantage-key
+              - name: FINNHUB_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: sentic-signal-secrets
+                    key: finnhub-api-key
+          restartPolicy: {{ .Values.restartPolicy }}

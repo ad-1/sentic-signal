@@ -1,0 +1,27 @@
+[project]
+name = "sentic-signal"
+version = "0.2.0"
+description = "AI-powered newsfeed for stock sentiment analysis."
+authors = [{ name = "Andrew Davies", email = "andrewdaviesul@gmail.com" }]
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "requests>=2.32",
+    "python-dotenv>=1.0",
+    "pydantic>=2.0",
+    "feedparser>=6.0",
+    "pika>=1.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-mock>=3.14"]
+
+[project.scripts]
+sentic-signal = "sentic_signal.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

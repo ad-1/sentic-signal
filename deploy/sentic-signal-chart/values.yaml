@@ -1,0 +1,24 @@
+# Locally (VS Code): run `scripts/gen-env.sh` to generate a .env file from
+# this file. Secrets (API keys) are injected separately via Kubernetes Secrets
+# or a local secrets file — never stored here.
+
+image:
+  repository: ghcr.io/ad-1/sentic-signal
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+config:
+  tickers: "TSLA,JNJ,NEE,XOM"
+  newsLookbackMinutes: "10080"
+  newsRelevanceThreshold: "0.1"
+  yahooRssEnabled: "true"
+
+rabbitmq:
+  host: "rabbitmq" # Service name in k8s; overridden to "localhost" in .env
+  port: "5672"
+  queue: "raw-news"
+
+schedule: "0 */2 * * *"
+
+concurrencyPolicy: Forbid
+restartPolicy: OnFailure
