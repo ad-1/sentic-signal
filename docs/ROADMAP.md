@@ -56,7 +56,7 @@ This repo is now a **dedicated news ingestor**. The Telegram notifier and analys
 | Docker Compose (local) | ✅ Complete | RabbitMQ + ingestor for local development. |
 | `values.yaml` → `.env` sync script | ✅ Complete | Shell script generates `.env` from `values.yaml` for VS Code development. |
 | Analyst / LLM layer | ⬜ Stub | Lives in `sentic-analyst` repo. |
-| CI/CD | ⬜ Not started | GitHub Actions pipeline planned. |
+| CI/CD | ⚠️ Defined, not validated | `ci.yml` workflow exists. Unit tests confirmed passing locally. Image build, GHCR push, and tag-update PR not yet validated end-to-end (no successful run recorded). |
 
 ---
 

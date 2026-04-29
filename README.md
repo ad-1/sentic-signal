@@ -186,6 +186,7 @@ Unit tests cover all logic in isolation (no external API calls). Integration tes
 
 ## 🛠️ Best Practices
 
+- **GitHub Actions permissions** — The CI workflow requires the repo's "Workflow permissions" to be set to **Read and write** (Settings → Actions → General). This allows `GITHUB_TOKEN` to push to GHCR and open the automated image-tag PR. Without it, the `build-and-push` and `update-image-tag` jobs will fail with a 403.
 - **Data contracts** — All inter-component data flows through validated Pydantic models (`NewsItem`, `Signal`), preventing integration bugs.
 - **Idempotency** — Article deduplication via URL/title hashing is planned to prevent repeated alerts.
 - **Dry-run mode** — Full pipeline execution without any external side effects, safe for CI/CD.
