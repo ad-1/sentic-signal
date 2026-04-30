@@ -107,10 +107,16 @@ This repo is now a **dedicated news ingestor**. The Telegram notifier and analys
 
 ### Phase 5 — Expand & Harden
 
-**Goal:** Add more providers, improve resilience, connect to the broader Sentic ecosystem.
+**Goal:** Add Tier 2 direct feeds for high-value niche sources; improve resilience; connect to the
+broader Sentic ecosystem. See VISION.md for the Tiered Ingestion Strategy.
 
-- [ ] Add Finnhub.io ingestor (60 req/min free tier — good for higher-frequency polling).
-- [ ] Add SEC EDGAR ingestor for official filings (8-K, 10-Q).
+**Tier 2 Direct Feeds (niche/regulatory):**
+- [ ] Add Stat News RSS ingestor (`statnews.com/feed/`) — pharmaceutical deep-dives; ensures 100%
+  coverage for MedTech/pharma tickers (e.g. JNJ). No discovery API lag.
+- [ ] Add SEC EDGAR ingestor for official filings (8-K, 10-Q) — often more "Red Teamable" than
+  news articles; timeliness is critical for material event detection.
+
+**Resilience & ecosystem:**
 - [ ] Expose a Sentiment API for consumption by `Sentic-Quant-Engine`.
 - [ ] Integrate with `Sentic-Sync` for dynamic watchlist ingestion from IBKR.
 - [ ] Persist processed signals to a datastore (Supabase or PostgreSQL) for sentiment drift tracking.
@@ -122,11 +128,14 @@ This repo is now a **dedicated news ingestor**. The Telegram notifier and analys
 
 Providers are prioritised by cost, rate limits, and signal quality:
 
-| Provider | Tier | Sentiment? | Rate Limit (Free) | Status |
+Providers are categorised by ingestion tier (see VISION.md — Tiered Ingestion Strategy):
+
+| Provider | Ingestion Tier | Sentiment? | Rate Limit (Free) | Status |
 |---|---|---|---|---|
-| Alpha Vantage | Financial API | ✅ Yes | 25 req/day | ✅ Implemented |
-| Yahoo Finance RSS | Direct Feed | ❌ No | Unlimited | ✅ Implemented |
-| Finnhub.io | Financial API | ❌ No | 60 req/min | ⬜ Planned |
-| SEC EDGAR | Direct Feed | ❌ No | 10 req/sec | ⬜ Planned |
-| Tiingo | Financial API | ❌ No | 1000 req/day | ⬜ Candidate |
-| NewsAPI.ai | Broad News | ❌ No | 100 req/day | ⬜ Candidate |
+| Alpha Vantage | Tier 1 — Funnel | ✅ Yes | 25 req/day | ✅ Implemented |
+| Yahoo Finance RSS | Tier 1 — Funnel | ❌ No | Unlimited | ✅ Implemented |
+| Finnhub.io | Tier 1 — Funnel | ❌ No | 60 req/min | ✅ Implemented |
+| Stat News RSS | Tier 2 — Direct Feed | ❌ No | Unlimited | ⬜ Phase 5 |
+| SEC EDGAR | Tier 2 — Direct Feed | ❌ No | 10 req/sec | ⬜ Phase 5 |
+| Tiingo | Tier 1 — Funnel | ❌ No | 1000 req/day | ⬜ Candidate |
+| NewsAPI.ai | Tier 1 — Funnel | ❌ No | 100 req/day | ⬜ Candidate |
