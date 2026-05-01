@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
 permissions:
   contents: write
@@ -53,11 +53,16 @@ jobs:
       matrix:
         overlay:
           - name: yahoo_rss (base)
-            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml"
+            files: "-f deploy/sentic-signal-chart/values.yaml -f
+              deploy/sentic-signal-chart/values-dev.yaml"
           - name: alpha_vantage
-            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml -f deploy/sentic-signal-chart/values-alpha-vantage.yaml"
+            files: "-f deploy/sentic-signal-chart/values.yaml -f
+              deploy/sentic-signal-chart/values-dev.yaml -f
+              deploy/sentic-signal-chart/values-alpha-vantage.yaml"
           - name: finnhub
-            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml -f deploy/sentic-signal-chart/values-finnhub.yaml"
+            files: "-f deploy/sentic-signal-chart/values.yaml -f
+              deploy/sentic-signal-chart/values-dev.yaml -f
+              deploy/sentic-signal-chart/values-finnhub.yaml"
     steps:
       - uses: actions/checkout@v4
 
@@ -82,7 +87,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-push:
     name: Build & Push
-    needs: [test, helm-lint]
+    needs: [ test, helm-lint ]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
@@ -119,7 +124,7 @@ jobs:
         with:
           image-ref: ${{ env.IMAGE_NAME }}:latest
           format: table
-          exit-code: '1'
+          exit-code: "1"
           severity: CRITICAL
 
   # ---------------------------------------------------------------------------
@@ -148,7 +153,8 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "ci: update sentic-signal image tag to sha-${{ steps.sha.outputs.short }}"
+          commit-message: "ci: update sentic-signal image tag to sha-${{
+            steps.sha.outputs.short }}"
           branch: ci/image-tag-${{ steps.sha.outputs.short }}
           delete-branch: true
           title: "ci: bump sentic-signal image tag → sha-${{ steps.sha.outputs.short }}"
