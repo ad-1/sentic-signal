@@ -2,10 +2,16 @@
 
 Implements the BaseIngestor protocol for Yahoo Finance RSS feeds.
 
-Yahoo Finance RSS feeds are free with no rate limits, making them ideal for
-high-frequency polling. Yahoo does not provide sentiment labels, so
-`provider_sentiment` is always None for items from this source. Sentiment
-analysis is performed downstream by the war room agents in sentic-analyst.
+Yahoo Finance RSS feeds are free and require no API key. However, Yahoo does
+apply IP-level rate limiting on burst traffic — rapid successive requests
+(e.g. dense manual testing) will produce HTTP 429 responses. At the default
+CronJob schedule (every 2 hours) this is not a production concern. The fetcher
+makes a single HTTP request per run regardless of lookback window size; lookback
+is a client-side filter applied after the response is received.
+
+Yahoo does not provide sentiment labels, so `provider_sentiment` is always None
+for items from this source. Sentiment analysis is performed downstream by the
+war room agents in sentic-analyst.
 
 Feed URL pattern: https://finance.yahoo.com/rss/2.0?ticker={ticker}
 
