@@ -18,8 +18,19 @@ spec:
               - configMapRef:
                   name: {{ include "sentic-signal-chart.fullname" . }}-config
             env:
-              # RabbitMQ password from the operator-generated default-user Secret.
+              # RabbitMQ connection details from the operator-generated default-user Secret.
+              # The Cluster Operator populates host, port, username, and password automatically.
               # Secret name: <cluster-name>-default-user (e.g. definition-default-user)
+              - name: RABBITMQ_HOST
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ .Values.rabbitmq.credentialsSecret }}
+                    key: host
+              - name: RABBITMQ_USERNAME
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ .Values.rabbitmq.credentialsSecret }}
+                    key: username
               - name: RABBITMQ_PASSWORD
                 valueFrom:
                   secretKeyRef:
