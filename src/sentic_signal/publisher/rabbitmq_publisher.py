@@ -5,7 +5,6 @@ to a RabbitMQ queue. It can be used by the ingestor modules to push
 fetched news items to a message queue for further processing.
 """
 
-import json
 import logging
 from typing import List
 
@@ -20,37 +19,53 @@ logger = logging.getLogger(__name__)
 class RabbitMQPublisher:
     """A simple RabbitMQ publisher for NewsItem objects."""
 
-    def __init__(self, host: str = "localhost", port: int = 5672, queue_name: str = "news_queue"):
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 5672,
+        queue_name: str = "news_queue",
+        username: str = "guest",
+        password: str = "guest",
+    ):
         """Initialize the RabbitMQ publisher.
-        
+
         Args:
-            host: RabbitMQ server host
-            port: RabbitMQ server port
+            host:       RabbitMQ server host
+            port:       RabbitMQ server port
             queue_name: Name of the queue to publish to
+            username:   RabbitMQ username (default: guest for local dev)
+            password:   RabbitMQ password (default: guest for local dev)
         """
         self.host = host
         self.port = port
         self.queue_name = queue_name
+        self._username = username
+        self._password = password
         self.connection = None
         self.channel = None
 
     def connect(self):
         """Establish connection to RabbitMQ server."""
         try:
+            credentials = pika.PlainCredentials(self._username, self._password)
             parameters = pika.ConnectionParameters(
                 host=self.host,
                 port=self.port,
+                credentials=credentials,
                 heartbeat=600,
-                blocked_connection_timeout=300
+                blocked_connection_timeout=300,
             )
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
-            
-            # Declare the queue (creates it if it doesn't exist)
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
-            
+
+            # Use passive=True — the queue is owned by the RabbitMQ Topology
+            # Operator and declared in sentic-infra/manifests/topology/queues.yaml.
+            # Re-declaring with different parameters raises a 406 PRECONDITION_FAILED
+            # error; passive mode asserts the queue exists without touching its config.
+            self.channel.queue_declare(queue=self.queue_name, passive=True)
+
             logger.info("Successfully connected to RabbitMQ at %s:%d", self.host, self.port)
-            
+
         except Exception as e:
             logger.error("Failed to connect to RabbitMQ: %s", str(e))
             raise
@@ -69,14 +84,15 @@ class RabbitMQPublisher:
             return False
             
         try:
-            # Convert NewsItem to dictionary for JSON serialization
-            message = news_item.model_dump()
-            
+            # Serialize using Pydantic's JSON serialiser so that HttpUrl, UUID,
+            # and datetime fields are converted to JSON-compatible strings.
+            message_json = news_item.model_dump_json()
+
             # Publish the message
             self.channel.basic_publish(
                 exchange='',
                 routing_key=self.queue_name,
-                body=json.dumps(message),
+                body=message_json,
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # Make message persistent
                 )

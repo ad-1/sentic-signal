@@ -1,0 +1,7 @@
+# Provider overlay: Finnhub.
+# Apply on top of values.yaml (or values-dev.yaml):
+#   helm upgrade sentic-signal . -f values.yaml -f values-finnhub.yaml
+#
+# Requires Kubernetes Secret 'sentic-signal-secrets' with key 'finnhub-api-key'.
+config:
+  provider: "finnhub"

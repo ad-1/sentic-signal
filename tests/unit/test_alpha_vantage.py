@@ -2,22 +2,17 @@
 
 These tests cover the private helper functions:
 - _parse_timestamp()
-- _parse_sentiment()
 - _parse_raw_article()
 - _extract_ticker_items()
 """
 
 from datetime import UTC, datetime
-from unittest.mock import patch
-import pytest
 
 from sentic_signal.ingestor.alpha_vantage import (
     _parse_timestamp,
-    _parse_sentiment,
     _parse_raw_article,
     _extract_ticker_items,
 )
-from sentic_signal.models import NewsItem, SentimentLabel
 
 
 # ---------------------------------------------------------------------------
@@ -55,42 +50,6 @@ class TestParseTimestamp:
 
 
 # ---------------------------------------------------------------------------
-# _parse_sentiment tests
-# ---------------------------------------------------------------------------
-
-
-class TestParseSentiment:
-    def test_parses_valid_sentiment_labels(self) -> None:
-        """Test parsing valid sentiment labels."""
-        test_cases = [
-            ("Bullish", SentimentLabel.BULLISH),
-            ("Somewhat-Bullish", SentimentLabel.SOMEWHAT_BULLISH),
-            ("Neutral", SentimentLabel.NEUTRAL),
-            ("Somewhat-Bearish", SentimentLabel.SOMEWHAT_BEARISH),
-            ("Bearish", SentimentLabel.BEARISH),
-        ]
-        
-        for label, expected in test_cases:
-            result = _parse_sentiment(label)
-            assert result == expected
-
-    def test_returns_none_for_invalid_sentiment(self) -> None:
-        """Test that invalid sentiment labels return None."""
-        result = _parse_sentiment("Invalid")
-        assert result is None
-
-    def test_returns_none_for_none_input(self) -> None:
-        """Test that None input returns None."""
-        result = _parse_sentiment(None)
-        assert result is None
-
-    def test_handles_special_characters_in_labels(self) -> None:
-        """Test handling of labels with special characters."""
-        result = _parse_sentiment("Somewhat-Bullish")
-        assert result == SentimentLabel.SOMEWHAT_BULLISH
-
-
-# ---------------------------------------------------------------------------
 # _parse_raw_article tests
 # ---------------------------------------------------------------------------
 
@@ -103,7 +62,6 @@ class TestParseRawArticle:
             "url": "https://example.com/test",
             "summary": "Test summary",
             "time_published": "20260413T143045",
-            "overall_sentiment_label": "Bullish",
         }
         
         result = _parse_raw_article(raw_article)
@@ -111,7 +69,6 @@ class TestParseRawArticle:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         assert result == expected
@@ -120,10 +77,9 @@ class TestParseRawArticle:
         """Test that articles with missing URL return None."""
         raw_article = {
             "title": "Test headline",
-            "url": "",  # Empty URL
+            "url": "",
             "summary": "Test summary",
             "time_published": "20260413T143045",
-            "overall_sentiment_label": "Bullish",
         }
         
         result = _parse_raw_article(raw_article)
@@ -136,7 +92,6 @@ class TestParseRawArticle:
             "url": "https://example.com/test",
             "summary": "Test summary",
             "time_published": "invalid_timestamp",
-            "overall_sentiment_label": "Bullish",
         }
         
         result = _parse_raw_article(raw_article)
@@ -146,31 +101,24 @@ class TestParseRawArticle:
         """Test handling of missing fields in raw article."""
         raw_article = {
             "title": "Test headline",
-            # Missing url, summary, time_published, overall_sentiment_label
+            # Missing url, summary, time_published
         }
         
         result = _parse_raw_article(raw_article)
         assert result is None
 
-    def test_handles_none_sentiment_label(self) -> None:
-        """Test handling of None sentiment label."""
+    def test_returns_none_summary_when_absent(self) -> None:
+        """Test that a missing summary field produces None, not an empty string."""
         raw_article = {
             "title": "Test headline",
             "url": "https://example.com/test",
-            "summary": "Test summary",
             "time_published": "20260413T143045",
-            "overall_sentiment_label": None,
         }
-        
+
         result = _parse_raw_article(raw_article)
-        expected = (
-            "Test headline",
-            "https://example.com/test",
-            "Test summary",
-            None,
-            datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
-        )
-        assert result == expected
+        assert result is not None
+        headline, url, summary, published = result
+        assert summary is None
 
 
 # ---------------------------------------------------------------------------
@@ -194,19 +142,53 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 1
         assert result[0].ticker == "AAPL"
         assert result[0].headline == "Test headline"
         assert str(result[0].url) == "https://example.com/test"
         assert result[0].summary == "Test summary"
-        assert result[0].provider_sentiment == SentimentLabel.BULLISH
         assert result[0].published == datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
-        assert result[0].relevance_score == 0.7
+
+    def test_item_id_is_deterministic(self) -> None:
+        """item_id is a UUID5 derived from url + ticker — same inputs → same ID."""
+        raw_article = {
+            "ticker_sentiment": [{"ticker": "AAPL", "relevance_score": 0.9}]
+        }
+        article = (
+            "Some headline",
+            "https://example.com/article",
+            None,
+            datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        )
+
+        result1 = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
+        result2 = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
+        assert result1[0].item_id == result2[0].item_id
+
+    def test_item_id_differs_for_different_tickers(self) -> None:
+        """Same article URL with different tickers produces different item_ids."""
+        raw_article = {
+            "ticker_sentiment": [
+                {"ticker": "AAPL", "relevance_score": 0.9},
+                {"ticker": "MSFT", "relevance_score": 0.9},
+            ]
+        }
+        article = (
+            "Tech sector update",
+            "https://example.com/tech",
+            None,
+            datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC),
+        )
+
+        result_aapl = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
+        result_msft = _extract_ticker_items(raw_article, article, "MSFT", 0.5)
+        assert len(result_aapl) == 1
+        assert len(result_msft) == 1
+        assert result_aapl[0].item_id != result_msft[0].item_id
 
     def test_skips_items_below_relevance_threshold(self) -> None:
         """Test that items below the relevance threshold are skipped."""
@@ -223,11 +205,10 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 0
 
     def test_skips_items_for_non_matching_ticker(self) -> None:
@@ -245,11 +226,10 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 0
 
     def test_handles_invalid_relevance_score(self) -> None:
@@ -267,11 +247,10 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 0  # Should skip due to invalid score
 
     def test_handles_multiple_matching_tickers(self) -> None:
@@ -293,14 +272,12 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL", "MSFT"], 0.5)
-        assert len(result) == 2
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
+        assert len(result) == 1
         assert result[0].ticker == "AAPL"
-        assert result[1].ticker == "MSFT"
 
     def test_handles_empty_ticker_sentiment(self) -> None:
         """Test handling of empty ticker_sentiment list."""
@@ -312,11 +289,10 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 0
 
     def test_handles_missing_ticker_sentiment(self) -> None:
@@ -329,11 +305,10 @@ class TestExtractTickerItems:
             "Test headline",
             "https://example.com/test",
             "Test summary",
-            SentimentLabel.BULLISH,
             datetime(2026, 4, 13, 14, 30, 45, tzinfo=UTC)
         )
         
-        result = _extract_ticker_items(raw_article, article, ["AAPL"], 0.5)
+        result = _extract_ticker_items(raw_article, article, "AAPL", 0.5)
         assert len(result) == 0
 
 

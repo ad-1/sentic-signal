@@ -1,8 +1,13 @@
-# Sentic-Signal — Architecture
+# Sentic-Signal - Architecture
 
-> AI-powered, provider-agnostic financial news sentiment pipeline.
+> Provider-agnostic news ingestion service for the Sentic platform.
 
-Sentic-Signal is the **Intelligence Layer** of the Sentic Finance Lab. It ingests ticker-specific news from multiple providers, normalises it into a standard schema, analyses sentiment and materiality, and delivers high-confidence signals to downstream consumers.
+Sentic-Signal is the discovery and normalization stage of the wider Sentic
+pipeline. Its responsibility is to fetch ticker-specific news from providers,
+normalize every item into the Sentic-defined `NewsItem` contract, and publish
+to RabbitMQ `raw-news`.
+
+This service does not perform sentiment scoring or multi-agent analysis.
 
 ---
 
@@ -60,273 +65,229 @@ Sentic-Signal is the **Intelligence Layer** of the Sentic Finance Lab. It ingest
 
 ```
 sentic-signal/
-├── .github/
-│   └── workflows/            # GitHub Actions CI/CD
-├── deploy/
-│   └── sentic-signal-chart/  # Helm chart for K8s deployment
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-│           ├── cronjob.yaml        # Ingestor CronJob
-│           ├── deployment-analyst.yaml   # (planned)
-│           ├── deployment-notifier.yaml  # (planned)
-│           └── _helpers.tpl
-├── src/
-│   └── sentic_signal/
-│       ├── __init__.py
-│       ├── main.py           # Pipeline entry point
-│       ├── models.py         # Pydantic data contracts (NewsItem, Signal)
-│       ├── ingestor/
-│       │   ├── __init__.py         # BaseIngestor protocol (planned)
-│       │   ├── alpha_vantage.py    # Alpha Vantage NEWS_SENTIMENT
-│       │   ├── yahoo_finance_rss.py # Yahoo Finance RSS feeds
-│       │   └── rabbitmq_publisher.py # Queue publisher utility
-│       ├── analyst/
-│       │   └── __init__.py         # Sentiment + materiality (planned)
-│       └── notifier/
-│           ├── __init__.py
-│           └── telegram.py         # Telegram MarkdownV2 dispatcher
-├── tests/
-│   ├── conftest.py
-│   ├── unit/
-│   │   ├── test_alpha_vantage.py
-│   │   └── test_telegram_notifier.py
-│   └── integration/
-│       └── test_verify_chat.py
-├── Dockerfile
-├── pyproject.toml
-└── README.md
+|- deploy/
+|  |- sentic-signal-chart/
+|  |  |- Chart.yaml
+|  |  |- values.yaml
+|  |  |- values-dev.yaml
+|  |  |- values-alpha-vantage.yaml
+|  |  |- values-finnhub.yaml
+|  |  |- templates/
+|  |  |  |- _helpers.tpl
+|  |  |  |- configmap.yaml
+|  |  |  |- cronjob.yaml
+|- scripts/
+|  |- gen-env.sh
+|- src/
+|  |- sentic_signal/
+|  |  |- main.py
+|  |  |- models.py
+|  |  |- ingestor/
+|  |  |  |- __init__.py
+|  |  |  |- alpha_vantage.py
+|  |  |  |- finnhub.py
+|  |  |  |- yahoo_finance_rss.py
+|  |  |- publisher/
+|  |  |  |- rabbitmq_publisher.py
+|- tests/
+|  |- conftest.py
+|  |- unit/
+|  |  |- test_alpha_vantage.py
+|  |  |- test_main_provider.py
+|  |- integration/
+|- Dockerfile
+|- pyproject.toml
+|- README.md
 ```
 
 ---
 
-## Data Contract — The "Sentic Standard"
+## Data Contract - NewsItem
 
-The core design decision: **we define the schema, providers adapt to it**. Every ingestor — regardless of source — outputs the same `NewsItem` model. This is what makes provider swaps trivial.
+The core design rule is unchanged: Sentic defines the schema, providers adapt
+to Sentic's schema.
 
-### NewsItem (Ingestor → Queue)
-
-The normalised article representation. Every provider maps its raw response into this format.
-
-| Field | Type | Description |
-|---|---|---|
-| `ticker` | `str` | Equity ticker symbol (e.g. `AAPL`). |
-| `headline` | `str` | Article title. |
-| `url` | `HttpUrl` | Canonical article URL. |
-| `summary` | `str` | Short article summary. |
-| `published` | `datetime` | UTC publication timestamp. |
-| `relevance_score` | `float` (0–1) | How relevant the article is to the ticker. Provider-supplied or heuristically computed. |
-| `sentiment` | `SentimentLabel \| None` | Provider-supplied sentiment (Alpha Vantage). `None` when unavailable (Yahoo, Finnhub). |
-| `source_provider` | `str` | Origin provider identifier (planned — e.g. `alpha_vantage`, `yahoo_rss`). |
-
-### Signal (Queue → Notifier / Quant Engine)
-
-The dispatch-ready output. Enriched with Sentic's own analysis.
+### NewsItem (published by sentic-signal)
 
 | Field | Type | Description |
 |---|---|---|
-| `ticker` | `str` | Equity ticker symbol. |
+| `ticker` | `str` | Equity ticker symbol (for example `AAPL`). |
 | `headline` | `str` | Article title. |
 | `url` | `HttpUrl` | Canonical article URL. |
-| `published` | `datetime` | UTC publication timestamp. |
-| `summary` | `str` | Article summary. |
-| `sentiment` | `SentimentLabel \| None` | Provider sentiment (preserved). |
-| `sentic_sentiment` | `float \| None` | Sentic-computed sentiment score (planned). |
-| `materiality` | `str \| None` | LLM-generated materiality assessment (planned). |
+| `summary` | `str | None` | Optional provider summary. |
+| `published` | `AwareDatetime` | Provider publication timestamp (UTC). |
+| `ingested_at` | `AwareDatetime` | Ingestion timestamp assigned by sentic-signal (UTC). |
+| `source_provider` | `SourceProvider` | Typed origin provider enum. |
+| `item_id` | `uuid.UUID` (computed) | Stable UUID5 from `url + ticker` for deduplication. |
 
-### SentimentLabel Enum
+Notes:
 
-```
-Bullish | Somewhat-Bullish | Neutral | Somewhat-Bearish | Bearish
-```
+- Provider-specific sentiment and relevance metadata are ingestion-time concerns
+  and do not cross this boundary in the canonical `NewsItem` contract.
+- Downstream contracts such as `AnalysisResult` are owned by downstream services.
+
+### SourceProvider Enum
+
+Current implemented values:
+
+- `alpha_vantage`
+- `yahoo_rss`
+- `finnhub`
+
+Planned values already reserved in code for Tier 2 direct feeds:
+
+- `stat_news_rss`
+- `sec_edgar`
 
 ---
 
 ## Provider Abstraction
 
-Each news provider implements a common interface. The pipeline doesn't know or care which provider produced a `NewsItem`.
+Every provider adapter implements one protocol:
 
 ```python
 class BaseIngestor(Protocol):
-    """Standard interface all news providers must implement."""
+    source_provider: SourceProvider
 
     def fetch_news(
         self,
-        tickers: list[str],
+        ticker: str,
         relevance_threshold: float = 0.5,
     ) -> list[NewsItem]:
-        """Fetch and normalise news for the given tickers."""
         ...
 ```
 
-### Current Providers
+### Implemented Providers
 
-**Alpha Vantage** (`ingestor/alpha_vantage.py`)
-- Calls the `NEWS_SENTIMENT` endpoint per ticker.
-- Provides relevance scores and sentiment labels natively.
-- Rate-limited to 25 req/day on free tier — schedule accordingly (every 2h).
-- Rate-limit exhaustion detected via `"Note"` / `"Information"` JSON fields.
+Alpha Vantage:
 
-**Yahoo Finance RSS** (`ingestor/yahoo_finance_rss.py`)
-- Parses RSS feeds at `https://finance.yahoo.com/rss/2.0?ticker={ticker}`.
-- Zero cost, no rate limits — suitable for high-frequency polling (every 15min).
-- No native sentiment — `sentiment` field is `None`; relies on the analyst worker.
-- Relevance is heuristically scored via ticker-in-text matching.
+- Endpoint: `NEWS_SENTIMENT`
+- Native ticker relevance data
+- Free-tier limit: 25 requests/day
 
-### Adding a New Provider
+Yahoo Finance RSS:
 
-1. Create `ingestor/your_provider.py`.
-2. Implement `fetch_news(tickers, relevance_threshold) -> list[NewsItem]`.
-3. Map the provider's raw response to `NewsItem` fields.
-4. Register the provider in the `IngestorRunner` config.
+- Endpoint: `https://finance.yahoo.com/rss/2.0?ticker={ticker}`
+- No API key required
+- Relevance estimated heuristically from ticker mention
 
----
+Finnhub:
 
-## Queue Architecture (RabbitMQ)
-
-RabbitMQ provides durable, persistent message queues that decouple the pipeline stages. If a consumer crashes, messages survive on disk and are reprocessed on restart.
-
-### Queues
-
-| Queue | Producer | Consumer | Message Type |
-|---|---|---|---|
-| `raw-news` | Ingestors (AV, Yahoo, etc.) | Analyst Worker | `NewsItem` (JSON) |
-| `analyzed-signals` | Analyst Worker | Telegram Notifier, Quant Engine | `Signal` (JSON) |
-
-### Message Flow
-
-1. **Ingestors** run on independent cron schedules. Each fetches from its provider, normalises to `NewsItem`, and publishes to `raw-news` with `delivery_mode=2` (persistent).
-2. **Analyst Worker** consumes from `raw-news`. It deduplicates (URL hash), runs sentiment analysis, and publishes enriched `Signal` objects to `analyzed-signals`.
-3. **Notifier** consumes from `analyzed-signals`. Filters by alert threshold and dispatches to Telegram.
-
-### Resilience
-
-- **Durable queues** — messages survive broker restarts.
-- **Persistent messages** — `delivery_mode=2` on all publishes.
-- **Independent producers** — if Alpha Vantage is rate-limited, Yahoo RSS keeps feeding the pipeline.
-- **Dead-letter queues** (planned) — failed messages are routed to a DLQ for inspection rather than dropped.
+- Endpoint: company-news API
+- Free-tier limit: 60 requests/minute
+- No provider sentiment in canonical output
 
 ---
 
-## Aggregation Strategy
+## Runtime Behavior
 
-Providers run **independently on their own schedules**. There is no global "fetch all sources, then process" step. This is intentional:
+### Current Implementation (v0.4.x — ADR-001 Phase 1)
 
-- Alpha Vantage has a 25 req/day limit → run every 2 hours.
-- Yahoo RSS is unlimited → run every 15 minutes.
-- Finnhub (planned) allows 60 req/min → run every 30 minutes.
+Configuration is loaded from environment in `main.py`.
 
-Each ingestor pushes to the same `raw-news` queue. The analyst worker processes messages as they arrive, regardless of which provider produced them. This means:
+- `PROVIDER` required — must be one of `alpha_vantage`, `finnhub`, `yahoo_rss`.
+- Exactly one ingestor is built per run; unknown provider values fail immediately.
+- Provider-specific secrets validated before any network I/O:
+  - `ALPHA_VANTAGE_KEY` required iff `PROVIDER=alpha_vantage`
+  - `FINNHUB_API_KEY` required iff `PROVIDER=finnhub`
+  - `yahoo_rss` requires no API key
+- `RABBITMQ_HOST` required (skipped when `DRY_RUN=true`).
+- `RABBITMQ_QUEUE` defaults to `raw-news`.
 
-- No provider blocks another.
-- The pipeline is always live as long as at least one provider is running.
-- Adding a new provider doesn't require changes to the analyst or notifier.
+Execution model:
+
+1. Resolve and validate `PROVIDER`.
+2. Validate provider-specific secrets (fail-fast).
+3. Build exactly one ingestor.
+4. Fetch news for configured ticker.
+5. Apply lookback filtering.
+6. Publish qualifying `NewsItem` objects to RabbitMQ `raw-news` (unless `DRY_RUN`).
+
+Error handling is fail-fast:
+
+- Missing or unknown `PROVIDER` raises `RuntimeError` before any work begins.
+- Missing required provider secret raises `RuntimeError` before network I/O.
+
+---
+
+## Queue Boundaries
+
+### Boundary Owned by This Repo
+
+| Queue | Publisher | Consumer |
+|---|---|---|
+| `raw-news` | `sentic-signal` | `sentic-extractor` |
+
+### Downstream Platform Topology (for context)
+
+| Queue | Publisher | Consumer |
+|---|---|---|
+| `rich-content` | `sentic-extractor` | `sentic-aggregator` |
+| `enriched-batches` | `sentic-aggregator` | `sentic-analyst` |
+| `analysis-results` | `sentic-analyst` | `sentic-quant` |
+| `notifications` | `sentic-analyst`, `sentic-quant` | `sentic-notifier` |
 
 ---
 
 ## Deployment Architecture
 
-### Target Environment
+### Current Pre-Release State
 
-- **Hardware:** Lenovo ThinkCentre i5 running minikube.
-- **Orchestration:** Kubernetes via Helm charts.
-- **CI/CD:** GitHub Actions → build Docker image → push to registry → Helm upgrade.
+- Kubernetes CronJob chart exists in `deploy/sentic-signal-chart/`
+- Config is rendered into a ConfigMap
+- Provider keys are injected from Kubernetes Secret refs
+- Deployment has not been launched to production yet
 
-### Kubernetes Resources
+### Target Pre-Release Deployment Model (ADR-001)
 
-```
-┌─────────────────────────────────────────────┐
-│              minikube cluster                │
-│                                             │
-│  ┌──────────────────┐  ┌────────────────┐   │
-│  │ CronJob:         │  │ Deployment:    │   │
-│  │ ingestor-av      │  │ analyst-worker │   │
-│  │ (every 2h)       │  │ (1 replica)    │   │
-│  └──────────────────┘  └────────────────┘   │
-│                                             │
-│  ┌──────────────────┐  ┌────────────────┐   │
-│  │ CronJob:         │  │ Deployment:    │   │
-│  │ ingestor-yahoo   │  │ notifier       │   │
-│  │ (every 15m)      │  │ (1 replica)    │   │
-│  └──────────────────┘  └────────────────┘   │
-│                                             │
-│  ┌──────────────────────────────────────┐   │
-│  │ StatefulSet: RabbitMQ (Bitnami)      │   │
-│  │ - PersistentVolume for message state │   │
-│  └──────────────────────────────────────┘   │
-│                                             │
-│  ┌──────────────────────────────────────┐   │
-│  │ Secret: sentic-secrets               │   │
-│  │ - ALPHA_VANTAGE_KEY                  │   │
-│  │ - TELEGRAM_BOT_TOKEN                 │   │
-│  │ - TELEGRAM_CHAT_ID                   │   │
-│  │ - RABBITMQ_PASSWORD                  │   │
-│  └──────────────────────────────────────┘   │
-└─────────────────────────────────────────────┘
-```
+One shared image, multiple provider-specific releases:
 
-### Helm Chart Structure (planned)
+- `sentic-signal-alpha-vantage`
+- `sentic-signal-yahoo-rss`
+- `sentic-signal-finnhub`
 
-```yaml
-# values.yaml — key sections
-rabbitmq:
-  enabled: true           # Deploy RabbitMQ as a subchart (Bitnami)
+Rules:
 
-ingestors:
-  alphaVantage:
-    schedule: "0 */2 * * *"
-    enabled: true
-  yahooRss:
-    schedule: "*/15 * * * *"
-    enabled: true
-
-analyst:
-  replicas: 1
-
-notifier:
-  replicas: 1
-  alertThreshold: 0.5
-```
+- exactly one provider per release
+- provider-specific schedules and resources
+- strict secret isolation per provider release
 
 ---
 
-## CI/CD Pipeline (GitHub Actions)
+## CI/CD Status
 
-```
-push/PR → lint (ruff) → unit tests (pytest) → build Docker image
-                                                      │
-                                              push to registry
-                                                      │
-                                              helm upgrade (minikube)
-```
+Current state:
 
-### Stages
+- workflows are defined
+- unit tests are passing locally
+- end-to-end pipeline validation is still in progress
 
-1. **Lint** — `ruff check src/ tests/`
-2. **Unit Tests** — `pytest tests/unit/ --cov`
-3. **Integration Tests** — `pytest tests/integration/` (with mocked APIs)
-4. **Docker Build** — Multi-stage build from `Dockerfile`
-5. **Push** — Push image to container registry (GHCR or Docker Hub)
-6. **Deploy** — `helm upgrade --install sentic-signal ./deploy/sentic-signal-chart`
+Expected flow:
+
+1. lint and unit test
+2. build image
+3. push image
+4. update deployment values
+5. deploy via GitOps
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables. No hardcoded secrets.
+### Current Runtime Variables
 
-| Variable | Required | Default | Description |
+| Variable | Required | Default | Notes |
 |---|---|---|---|
-| `ALPHA_VANTAGE_KEY` | ✅ | — | Alpha Vantage API key |
-| `TELEGRAM_BOT_TOKEN` | ✅ | — | Bot token from @BotFather |
-| `TELEGRAM_CHAT_ID` | ✅ | — | Target chat/channel ID |
-| `TICKERS` | ❌ | `AAPL,TSLA,NVDA` | Comma-separated equity tickers |
-| `NEWS_LOOKBACK_MINUTES` | ❌ | `60` | Only surface articles within N minutes |
-| `NEWS_RELEVANCE_THRESHOLD` | ❌ | `0.5` | Minimum relevance score to include |
-| `DRY_RUN` | ❌ | `false` | Log alerts without sending |
-| `RABBITMQ_HOST` | ❌ | `localhost` | RabbitMQ server host |
-| `RABBITMQ_PORT` | ❌ | `5672` | RabbitMQ server port |
-| `RABBITMQ_QUEUE` | ❌ | `news_queue` | Default queue name |
+| `PROVIDER` | Yes | none | Must be one of `alpha_vantage`, `finnhub`, `yahoo_rss`. Fail-fast if absent or unknown. |
+| `TICKER` | No | `AAPL` | Single ticker per run. |
+| `NEWS_LOOKBACK_MINUTES` | No | `60` | Lookback filter window. |
+| `NEWS_RELEVANCE_THRESHOLD` | No | `0.5` | Provider relevance filter threshold. |
+| `DRY_RUN` | No | `false` | When `true`, skips queue publish and bypasses `RABBITMQ_HOST` requirement. |
+| `ALPHA_VANTAGE_KEY` | Conditional | none | Required iff `PROVIDER=alpha_vantage`. |
+| `FINNHUB_API_KEY` | Conditional | none | Required iff `PROVIDER=finnhub`. |
+| `RABBITMQ_HOST` | Yes (non-dry) | none | Broker host. |
+| `RABBITMQ_PORT` | No | `5672` | Broker port. |
+| `RABBITMQ_QUEUE` | No | `raw-news` | Publish queue. |
 
 ---
 
@@ -335,13 +296,16 @@ All configuration is via environment variables. No hardcoded secrets.
 | Layer | Technology |
 |---|---|
 | Language | Python 3.13 |
-| Data Contracts | Pydantic v2 |
-| HTTP Client | requests |
-| RSS Parsing | feedparser |
-| Message Broker | RabbitMQ (pika client) |
-| Sentiment (planned) | vaderSentiment / FinBERT |
-| LLM (planned) | Gemini Flash |
-| Containerisation | Docker (multi-stage) |
-| Orchestration | Kubernetes (minikube) |
-| Packaging | Helm 3 |
-| CI/CD | GitHub Actions |
+| Data contracts | Pydantic v2 |
+| HTTP clients | `requests`, `feedparser` |
+| Message broker | RabbitMQ (`pika`) |
+| Containerization | Docker |
+| Orchestration | Kubernetes + Helm |
+| CI/CD | GitHub Actions + GitOps |
+
+---
+
+## Related Decisions
+
+- ADR-001 provider-specific deployments: `docs/adr/ADR-001-PROVIDER-SPECIFIC-DEPLOYMENTS.md`
+- ADR-003 five-stage platform boundary: `../sentic-infra/docs/adr/ADR-003-PIPELINE-ARCHITECTURE.md`

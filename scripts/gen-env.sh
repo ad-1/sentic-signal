@@ -44,15 +44,19 @@ generate() {
 # Do not edit by hand — re-run the script to regenerate.
 # Secrets (API keys) come from .env.secrets, not here.
 
-TICKERS=$(yq '.config.tickers' "${VALUES}")
+PROVIDER=$(yq '.config.provider' "${VALUES}")
+TICKER=$(yq '.config.ticker' "${VALUES}")
 NEWS_LOOKBACK_MINUTES=$(yq '.config.newsLookbackMinutes' "${VALUES}")
 NEWS_RELEVANCE_THRESHOLD=$(yq '.config.newsRelevanceThreshold' "${VALUES}")
-YAHOO_RSS_ENABLED=$(yq '.config.yahooRssEnabled' "${VALUES}")
 
 # RabbitMQ — override host to localhost for local development.
 RABBITMQ_HOST=localhost
 RABBITMQ_PORT=$(yq '.rabbitmq.port' "${VALUES}")
 RABBITMQ_QUEUE=$(yq '.rabbitmq.queue' "${VALUES}")
+# RabbitMQ credentials — defaults match local Docker Compose (guest/guest).
+# In k8s these are injected from the operator-generated Secret.
+RABBITMQ_USERNAME=guest
+RABBITMQ_PASSWORD=guest
 EOF
 }
 

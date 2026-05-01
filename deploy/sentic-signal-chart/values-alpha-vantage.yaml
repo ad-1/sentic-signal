@@ -1,0 +1,13 @@
+# Provider overlay: Alpha Vantage.
+# Apply on top of values.yaml (or values-dev.yaml):
+#   helm upgrade sentic-signal . -f values.yaml -f values-alpha-vantage.yaml
+#
+# Requires Kubernetes Secret 'sentic-signal-secrets' with key 'alpha-vantage-key'.
+#
+# Schedule: every 6 hours (4 runs/day). Alpha Vantage free tier is 25 req/day.
+# The base values.yaml schedule (*/2 hours = 12 runs/day) would exhaust the
+# limit and return silent empty responses rather than an HTTP error.
+config:
+  provider: "alpha_vantage"
+
+schedule: "0 */6 * * *"

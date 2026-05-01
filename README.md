@@ -23,7 +23,7 @@ Sentic-Signal is an automated financial intelligence agent that fetches real-tim
 Sentic-Signal operates as a three-stage pipeline:
 
 ### 1. Ingestion
-- Fetches the `NEWS_SENTIMENT` feed from **Alpha Vantage** for each configured ticker.
+- Fetches the `NEWS_SENTIMENT` feed from **Alpha Vantage** for the configured ticker.
 - Parses and validates each article into a `NewsItem` Pydantic model.
 - Drops articles with a `ticker_relevance_score < 0.5` (heuristic hard filter).
 
@@ -70,7 +70,7 @@ cp .env.example .env
 | `ALPHA_VANTAGE_KEY`     | ✅        | —                | Alpha Vantage API key                          |
 | `TELEGRAM_BOT_TOKEN`    | ✅        | —                | Bot token from @BotFather                      |
 | `TELEGRAM_CHAT_ID`      | ✅        | —                | Target chat/channel ID (negative for groups)   |
-| `TICKERS`               | ❌        | `AAPL,TSLA,NVDA` | Comma-separated list of equity tickers         |
+| `TICKER`                | ❌        | `AAPL`           | Single equity ticker symbol                    |
 | `NEWS_LOOKBACK_MINUTES` | ❌        | `60`             | Only surface articles published within N mins  |
 | `DRY_RUN`               | ❌        | `false`          | Set to `true` to log alerts without sending    |
 
@@ -107,7 +107,7 @@ docker run --env-file .env sentic-signal
 
 ## 🔄 Pipeline Walkthrough
 
-1. **Fetch** — For each ticker in `TICKERS`, call Alpha Vantage `NEWS_SENTIMENT`.
+1. **Fetch** — For configured `TICKER`, call Alpha Vantage `NEWS_SENTIMENT`.
 2. **Filter (relevance)** — Discard any article with `ticker_relevance_score < 0.5`.
 3. **Filter (lookback)** — Discard articles older than `NEWS_LOOKBACK_MINUTES`.
 4. **Promote** — Each qualifying `NewsItem` becomes a `Signal`.

@@ -1,28 +1,27 @@
-# Sentic-Signal — 2026 Roadmap
+# Sentic-Signal - 2026 Roadmap
+
+## Scope Statement
+
+This roadmap describes the evolution of the `sentic-signal` repository.
+
+`sentic-signal` is the ingestion boundary of the broader Sentic platform:
+
+- fetch provider news
+- normalize to `NewsItem`
+- publish to RabbitMQ `raw-news`
+
+Sentiment scoring, multi-agent analysis, and notifications are downstream
+responsibilities in other services.
+
+---
 
 ## Core Mission
 
-Build an automated, provider-agnostic pipeline that:
-
-1. **Aggregates** real-time ticker-specific news from multiple providers.
-2. **Normalises** every response into a single Sentic-defined data contract — the system is designed around *our* schema, not any provider's.
-3. **Analyses** each article for sentiment and materiality — using both provider-supplied signals (when available) and our own Sentic sentiment engine.
-4. **Delivers** high-confidence signals through durable RabbitMQ queues to downstream consumers (Telegram alerts today, Sentic-Quant-Engine tomorrow).
-
-### Why Provider-Agnostic?
-
-We started with Alpha Vantage and have expanded to Yahoo Finance RSS. More providers will follow. The key design constraint is **zero vendor lock-in**: every provider is a plug-in that conforms to a standard `BaseIngestor` interface and outputs normalised `NewsItem` objects. If a provider disappears, hits rate limits, or degrades — the rest of the pipeline keeps running.
-
-### Sentiment Strategy: Dual-Track
-
-Some providers deliver sentiment (Alpha Vantage). Others don't (Yahoo RSS). Rather than choosing one source, we carry **both**:
-
-| Field | Source | Purpose |
-|---|---|---|
-| `provider_sentiment` | Alpha Vantage, future providers | Free signal from the provider's own models. Preserved as-is. |
-| `sentic_sentiment` | Our own analysis (FinBERT / LLM) | Consistent scoring across all articles, regardless of provider. |
-
-This gives us: (a) a working pipeline before our own model is production-ready, (b) a baseline to validate and tune our model against, and (c) graceful degradation for providers that don't supply sentiment.
+1. Aggregate ticker-specific news from multiple providers.
+2. Normalize all provider output into a strict Sentic contract (`NewsItem`).
+3. Publish durable `raw-news` events for downstream pipeline services.
+4. Deploy providers as isolated release units using a shared image and shared
+   contracts (ADR-001).
 
 ---
 
@@ -30,112 +29,144 @@ This gives us: (a) a working pipeline before our own model is production-ready, 
 
 | Principle | Implementation |
 |---|---|
-| **Provider-agnostic ingestion** | `BaseIngestor` protocol — every provider implements `fetch_news()` and returns `list[NewsItem]`. |
-| **Our contract, not theirs** | `NewsItem` is the canonical schema this service owns. `Signal` lives in downstream repos. Providers adapt to our schema, not the other way around. |
-| **Durable messaging** | RabbitMQ with persistent queues. If a consumer crashes, messages survive and are reprocessed. |
-| **Independent scheduling** | Each ingestor runs on its own cron interval (AV every 2h, Yahoo every 15min). No global synchronisation required. |
-| **Microservice boundaries at queues** | Each queue (`raw-news`, `analyzed-signals`, `notifications`) is a natural service boundary. |
-| **Fail-open, log loudly** | If one provider fails, the others keep running. Errors are logged, never silently swallowed. |
+| Provider-agnostic ingestion | `BaseIngestor` protocol for all adapters. |
+| Sentic-owned contract | Providers adapt to `NewsItem`; the schema does not adapt to providers. |
+| Single responsibility | This service ends at `raw-news`; no in-service analysis. |
+| Durable messaging | RabbitMQ queues with persistent delivery. |
+| Operational isolation | Provider-specific deployments from one shared image (in progress). |
+| Explicit configuration | Runtime should fail fast on invalid provider/secret config. |
 
 ---
 
-## Current State (v0.3.0)
-
-This repo is now a **dedicated news ingestor**. The Telegram notifier and analyst layers are separate microservices in their own repos (`sentic-notifier`, `sentic-analyst`), communicating via RabbitMQ queues.
+## Current State (v0.4.x)
 
 | Component | Status | Notes |
 |---|---|---|
-| Alpha Vantage ingestor | ✅ Complete | `AlphaVantageIngestor` implements `BaseIngestor`. Fetches NEWS_SENTIMENT, filters by relevance. |
-| Yahoo Finance RSS ingestor | ✅ Complete | `YahooFinanceIngestor` implements `BaseIngestor`. Wired into `main.py`. |
-| Finnhub ingestor | ✅ Complete | `FinnhubIngestor` implements `BaseIngestor`. 60 req/min free tier. |
-| RabbitMQ publisher | ✅ Complete | `RabbitMQPublisher` in `main.py`. RabbitMQ is the only dispatch target. |
-| Pydantic data contracts | ✅ Complete | `NewsItem` carries `provider_sentiment`, `sentic_sentiment`, `source_provider`. `Signal` lives in downstream repos. |
-| `BaseIngestor` protocol | ✅ Complete | Runtime-checkable Protocol. All providers conform. |
-| Telegram notifier | ✅ Extracted | Moved to `sentic-notifier` repo. No longer part of this service. |
-| Helm chart | 🔄 In progress | CronJob template updated. ConfigMap for env injection. Needs RabbitMQ subchart dependency. |
-| Docker Compose (local) | ✅ Complete | RabbitMQ + ingestor for local development. |
-| `values.yaml` → `.env` sync script | ✅ Complete | Shell script generates `.env` from `values.yaml` for VS Code development. |
-| Analyst / LLM layer | ⬜ Stub | Lives in `sentic-analyst` repo. |
-| CI/CD | ⚠️ Defined, not validated | `ci.yml` workflow exists. Unit tests confirmed passing locally. Image build, GHCR push, and tag-update PR not yet validated end-to-end (no successful run recorded). |
+| Alpha Vantage ingestor | Complete | Adapter implemented and wired into runtime. |
+| Yahoo Finance RSS ingestor | Complete | Adapter implemented and wired into runtime. |
+| Finnhub ingestor | Complete | Adapter implemented and wired into runtime. |
+| Canonical contract | Complete | `NewsItem` includes `source_provider`, `ingested_at`, computed `item_id`. |
+| RabbitMQ publisher | Complete | Publishes to `raw-news`. |
+| Helm chart baseline | Complete | CronJob + ConfigMap templates render; `PROVIDER` added; secrets conditional by provider. |
+| Runtime selection model | Complete | `PROVIDER` required; single ingestor per run; fail-fast secret validation. |
+| Provider overlay values | Complete | `values-alpha-vantage.yaml`, `values-finnhub.yaml` overlays created. |
+| Helm CI lint/render matrix | Complete | All three provider overlays validated in CI (`helm-lint` job with matrix strategy). |
+| Argo CD Application manifests | Complete | `sentic-signal-yahoo-rss`, `sentic-signal-alpha-vantage`, `sentic-signal-finnhub` in sentic-infra. |
+| CI/CD pipeline validation | In progress | Workflow exists; full publish and deploy validation still pending. |
+| Production deployment | Not started | Pre-release design and preparation stage. |
+
+---
+
+## Queue Boundary Context
+
+`sentic-signal` ownership ends at `raw-news`.
+
+Platform context (outside this repo):
+
+- `raw-news` -> `sentic-extractor`
+- `rich-content` -> `sentic-aggregator`
+- `enriched-batches` -> `sentic-analyst`
+- `analysis-results` / `notifications` -> downstream consumers
 
 ---
 
 ## Phased Roadmap
 
-### Phase 1 — Provider Abstraction & Queue Integration ✅ Complete
+### Phase 1 - Provider Adapters and Raw-News Boundary (Complete)
 
-**Goal:** Wire the existing components together through RabbitMQ so the pipeline runs as decoupled producers/consumers.
+- [x] Define `BaseIngestor` protocol.
+- [x] Implement Alpha Vantage, Yahoo RSS, and Finnhub adapters.
+- [x] Publish normalized `NewsItem` events to `raw-news`.
+- [x] Keep this repo scoped to ingestion only.
 
-- [x] Define `BaseIngestor` protocol in `ingestor/__init__.py` with a standard `fetch_news() -> list[NewsItem]` interface.
-- [x] Refactor `AlphaVantageIngestor` and `YahooFinanceIngestor` to implement `BaseIngestor`.
-- [x] Add `FinnhubIngestor` — 60 req/min free tier, ticker-specific news endpoint.
-- [x] Extend `NewsItem` model to carry `provider_sentiment` (from the source) alongside a future `sentic_sentiment` field.
-- [x] Add a `source_provider` field to `NewsItem` so downstream consumers know where each article originated.
-- [x] Wire ingestors → `RabbitMQPublisher` → `raw-news` queue in `main.py`. RabbitMQ is the only dispatch target.
-- [x] Helm `values.yaml` as single source of truth for all config. Shell script generates `.env` from `values.yaml` for local development.
-- [x] Docker Compose with RabbitMQ for local development and integration testing.
+### Phase 2 - Service Boundary Clarification (Complete)
 
-### Phase 2 — Analyst Worker (Consumer)
+- [x] Align to ADR-003 five-stage platform boundary.
+- [x] Remove in-service notifier/analyst assumptions.
+- [x] Keep `sentic-signal` as pure producer to `raw-news`.
 
-**Goal:** Build the "brain" that consumes from `raw-news`, deduplicates, scores sentiment, and publishes to `analyzed-signals`.
+### Phase 3 - Provider-Specific Deployment Model (Complete)
 
-- [ ] Implement URL/title-hash deduplication (SQLite or in-memory set for MVP).
-- [ ] Integrate a local sentiment model (vaderSentiment for speed, FinBERT for accuracy) to produce `sentic_sentiment`.
-- [ ] Build the analyst worker as a RabbitMQ consumer that reads from `raw-news` and publishes to `analyzed-signals`.
-- [ ] Preserve `provider_sentiment` when available; populate `sentic_sentiment` for all articles.
-- [ ] Add materiality scoring (Gemini Flash LLM) for high-relevance signals — gated behind a feature flag.
+Goal: implement ADR-001 in pre-release environments.
 
-### Phase 3 — Notifier & Infra Separation ✅ Complete
+- [x] Define target architecture in ADR-001 with pre-release gates.
+- [x] Fix Helm helper include mismatch so chart renders successfully.
+- [x] Implement explicit `PROVIDER` runtime selection.
+- [x] Enforce one ingestor per run and fail-fast provider validation.
+- [x] Add provider-specific required-secret validation.
+- [x] Remove auto-enable behavior based only on key presence.
+- [x] Add runtime unit tests for provider selection and validation.
+- [x] Create provider overlay values for alpha_vantage, yahoo_rss, finnhub.
+- [x] Add CI render/lint matrix for all provider overlays.
+- [x] Add Argo CD Application manifests per provider release in sentic-infra.
 
-**Goal:** Extract notifier to its own microservice; define the shared RabbitMQ infrastructure boundary.
+### Phase 4 - CI/CD Hardening
 
-- [x] `TelegramNotifier` extracted to `sentic-notifier` repo — standalone RabbitMQ consumer.
-- [x] `sentic-signal` is now a pure ingestor: fetch → normalise → publish to queue. No direct dispatch.
-- [x] Shared RabbitMQ infrastructure managed via a dedicated `sentic-infra` repo (Helm + Bitnami subchart on minikube).
-- [ ] Add configurable alert thresholds in `sentic-notifier` (e.g., only notify on `|sentic_sentiment| > 0.5`).
+Goal: prove repeatable artifact and deployment flow.
 
-### Phase 4 — Deployment & CI/CD *(current priority)*
+- [ ] Validate image build and push to GHCR end-to-end.
+- [ ] Validate image tag update workflow for deployment values.
+- [ ] Validate Trivy scan execution and gating behavior.
+- [ ] Add/expand integration tests for publish path and queue contract.
 
-**Goal:** Deploy to minikube on Lenovo ThinkCentre i5 hardware; automate with GitHub Actions.
+### Phase 5 - Launch Readiness (First Release)
 
-- [ ] `sentic-infra` repo: Helm chart for shared infrastructure (RabbitMQ Bitnami subchart, persistent volumes, queue declarations).
-- [ ] Per-service Helm charts (`sentic-signal`, `sentic-analyst`, `sentic-notifier`) reference shared infra queue names via ConfigMap.
-- [ ] Add Kubernetes `Secret` manifests for API keys (`ALPHA_VANTAGE_KEY`, `FINNHUB_API_KEY`) and queue credentials.
-- [ ] GitHub Actions workflow: lint → unit tests → build Docker image → push to registry → Helm upgrade to minikube.
-- [ ] Configure minikube on ThinkCentre with persistent volumes for RabbitMQ state.
-- [ ] Add readiness probes and resource limits to CronJob spec.
+Goal: transition from pre-release validation to first live deployment.
 
-### Phase 5 — Expand & Harden
+- [ ] Deploy provider-specific releases in launch environment.
+- [ ] Achieve pre-release gate of 3/3 successful scheduled runs per provider.
+- [ ] Verify secret isolation per provider release.
+- [ ] Publish launch checklist and runbook.
+- [ ] Freeze one shared image tag across provider releases for launch.
 
-**Goal:** Add Tier 2 direct feeds for high-value niche sources; improve resilience; connect to the
-broader Sentic ecosystem. See VISION.md for the Tiered Ingestion Strategy.
+### Phase 6 - Expand and Harden
 
-**Tier 2 Direct Feeds (niche/regulatory):**
-- [ ] Add Stat News RSS ingestor (`statnews.com/feed/`) — pharmaceutical deep-dives; ensures 100%
-  coverage for MedTech/pharma tickers (e.g. JNJ). No discovery API lag.
-- [ ] Add SEC EDGAR ingestor for official filings (8-K, 10-Q) — often more "Red Teamable" than
-  news articles; timeliness is critical for material event detection.
+Goal: extend source coverage and resilience after launch.
 
-**Resilience & ecosystem:**
-- [ ] Expose a Sentiment API for consumption by `Sentic-Quant-Engine`.
-- [ ] Integrate with `Sentic-Sync` for dynamic watchlist ingestion from IBKR.
-- [ ] Persist processed signals to a datastore (Supabase or PostgreSQL) for sentiment drift tracking.
-- [ ] RabbitMQ dead-letter queues for failed messages; retry logic with exponential backoff.
+Tier 2 direct feeds:
+
+- [ ] Add Stat News RSS ingestor (`source_provider=stat_news_rss`).
+- [ ] Add SEC EDGAR ingestor (`source_provider=sec_edgar`).
+
+Resilience and platform integration:
+
+- [ ] Add dead-letter queue strategy and retry policy.
+- [ ] Integrate dynamic watchlist inputs from `sentic-sync`.
+- [ ] Expand provider conformance test suite.
 
 ---
 
-## Data Providers
+## Success Metrics
 
-Providers are prioritised by cost, rate limits, and signal quality:
+### Pre-Release Gates
 
-Providers are categorised by ingestion tier (see VISION.md — Tiered Ingestion Strategy):
+- `helm template` passes for base and every provider overlay.
+- 3/3 successful scheduled runs per provider in launch environment.
+- 0 secret-scope violations across provider deployments.
 
-| Provider | Ingestion Tier | Sentiment? | Rate Limit (Free) | Status |
-|---|---|---|---|---|
-| Alpha Vantage | Tier 1 — Funnel | ✅ Yes | 25 req/day | ✅ Implemented |
-| Yahoo Finance RSS | Tier 1 — Funnel | ❌ No | Unlimited | ✅ Implemented |
-| Finnhub.io | Tier 1 — Funnel | ❌ No | 60 req/min | ✅ Implemented |
-| Stat News RSS | Tier 2 — Direct Feed | ❌ No | Unlimited | ⬜ Phase 5 |
-| SEC EDGAR | Tier 2 — Direct Feed | ❌ No | 10 req/sec | ⬜ Phase 5 |
-| Tiingo | Tier 1 — Funnel | ❌ No | 1000 req/day | ⬜ Candidate |
-| NewsAPI.ai | Tier 1 — Funnel | ❌ No | 100 req/day | ⬜ Candidate |
+### Post-Launch Targets
+
+- >= 99% CronJob success rate per provider over rolling 7 days.
+- >= 99.5% publish success ratio to `raw-news` per provider.
+- Provider deployment changes remain isolated (no cross-provider restart requirement).
+
+---
+
+## Provider Landscape
+
+| Provider | Tier | Rate Limit (Free) | Status |
+|---|---|---|---|
+| Alpha Vantage | Tier 1 funnel | 25 req/day | Implemented |
+| Yahoo Finance RSS | Tier 1 funnel | Unlimited | Implemented |
+| Finnhub | Tier 1 funnel | 60 req/min | Implemented |
+| Stat News RSS | Tier 2 direct feed | Unlimited | Planned |
+| SEC EDGAR | Tier 2 direct feed | 10 req/sec | Planned |
+
+---
+
+## Decision References
+
+- ADR-001 provider-specific deployment model:
+  `docs/adr/ADR-001-PROVIDER-SPECIFIC-DEPLOYMENTS.md`
+- ADR-003 five-stage platform architecture:
+  `../sentic-infra/docs/adr/ADR-003-PIPELINE-ARCHITECTURE.md`

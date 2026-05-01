@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "sentic-signal.fullname" . }}
+  name: {{ include "sentic-signal-chart.fullname" . }}
 spec:
   schedule: {{ .Values.schedule | quote }}
   concurrencyPolicy: {{ .Values.concurrencyPolicy }}
@@ -16,17 +16,27 @@ spec:
             envFrom:
               # Non-secret config from ConfigMap (rendered from values.yaml)
               - configMapRef:
-                  name: {{ include "sentic-signal.fullname" . }}-config
+                  name: {{ include "sentic-signal-chart.fullname" . }}-config
             env:
-              # Secrets injected individually from Kubernetes Secret
+              # RabbitMQ password from the operator-generated default-user Secret.
+              # Secret name: <cluster-name>-default-user (e.g. definition-default-user)
+              - name: RABBITMQ_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ .Values.rabbitmq.credentialsSecret }}
+                    key: password
+              {{- if eq .Values.config.provider "alpha_vantage" }}
               - name: ALPHA_VANTAGE_KEY
                 valueFrom:
                   secretKeyRef:
                     name: sentic-signal-secrets
                     key: alpha-vantage-key
+              {{- end }}
+              {{- if eq .Values.config.provider "finnhub" }}
               - name: FINNHUB_API_KEY
                 valueFrom:
                   secretKeyRef:
                     name: sentic-signal-secrets
                     key: finnhub-api-key
+              {{- end }}
           restartPolicy: {{ .Values.restartPolicy }}

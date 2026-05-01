@@ -12,8 +12,9 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-RUN pip install --upgrade pip && pip install --no-cache-dir -e ".[dev]"
+# Install production dependencies only — dev extras (pytest, coverage) must
+# not be included in the runtime image.
+RUN pip install --upgrade pip && pip install --no-cache-dir -e "."
 
 # Final stage
 FROM python:3.13-slim
@@ -29,9 +30,6 @@ WORKDIR /home/appuser
 # Copy the installed dependencies and source code from builder stage
 COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
 COPY --from=builder /app/src /app/src
-
-# Copy entrypoint script (if needed)
-COPY --chown=appuser:appuser ./.env.example .env.example
 
 # Set environment variables
 ENV PYTHONPATH=/app/src

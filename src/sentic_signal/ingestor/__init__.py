@@ -7,7 +7,7 @@ and shared utilities used across ingestors.
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
-from sentic_signal.models import NewsItem
+from sentic_signal.models import NewsItem, SourceProvider
 
 
 @runtime_checkable
@@ -19,17 +19,17 @@ class BaseIngestor(Protocol):
     this protocol — not any specific provider implementation.
     """
 
-    source_provider: str
+    source_provider: SourceProvider
 
     def fetch_news(
         self,
-        tickers: list[str],
+        ticker: str,
         relevance_threshold: float = 0.5,
     ) -> list[NewsItem]:
-        """Fetch and normalise news for the given tickers.
+        """Fetch and normalise news for the given ticker.
 
         Args:
-            tickers:             Uppercase ticker symbols (e.g. ["AAPL", "MSFT"]).
+            ticker:              Uppercase ticker symbol (e.g. "AAPL").
             relevance_threshold: Minimum relevance score (0–1) to include an article.
 
         Returns:

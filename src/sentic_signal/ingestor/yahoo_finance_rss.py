@@ -3,8 +3,9 @@
 Implements the BaseIngestor protocol for Yahoo Finance RSS feeds.
 
 Yahoo Finance RSS feeds are free with no rate limits, making them ideal for
-high-frequency polling. They do not provide sentiment labels — the analyst
-worker will populate sentic_sentiment for all items from this source.
+high-frequency polling. Yahoo does not provide sentiment labels, so
+`provider_sentiment` is always None for items from this source. Sentiment
+analysis is performed downstream by the war room agents in sentic-analyst.
 
 Feed URL pattern: https://finance.yahoo.com/rss/2.0?ticker={ticker}
 
@@ -13,42 +14,42 @@ feedparser normalises publication timestamps to UTC in entry.published_parsed
 """
 
 import logging
-import time
 from datetime import UTC, datetime
 
 import feedparser
 import requests
+from pydantic import HttpUrl, TypeAdapter, ValidationError
 
-from sentic_signal.models import NewsItem, SentimentLabel
+from sentic_signal.models import NewsItem, SourceProvider
 
 logger = logging.getLogger(__name__)
 
 _YAHOO_RSS_ENDPOINT = "https://finance.yahoo.com/rss/2.0"
 _REQUEST_TIMEOUT = 30  # seconds
 _DEFAULT_RELEVANCE_THRESHOLD = 0.5
-_SOURCE_PROVIDER = "yahoo_rss"
+_HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
 
 
 class YahooFinanceIngestor:
     """News provider adapter for Yahoo Finance RSS feeds."""
 
-    source_provider: str = _SOURCE_PROVIDER
+    source_provider: SourceProvider = SourceProvider.YAHOO_RSS
 
     def fetch_news(
         self,
-        tickers: list[str],
+        ticker: str,
         relevance_threshold: float = _DEFAULT_RELEVANCE_THRESHOLD,
     ) -> list[NewsItem]:
-        """Fetch and normalise news for *tickers* from Yahoo Finance RSS.
+        """Fetch and normalise news for *ticker* from Yahoo Finance RSS.
 
         Args:
-            tickers:             Uppercase ticker symbols (e.g. ["AAPL", "MSFT"]).
+            ticker:              Uppercase ticker symbol (e.g. "AAPL").
             relevance_threshold: Minimum relevance score to include.
 
         Returns:
             Normalised list of NewsItem objects.
         """
-        return _fetch_news(tickers, relevance_threshold)
+        return _fetch_news(ticker, relevance_threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -57,43 +58,39 @@ class YahooFinanceIngestor:
 
 
 def _fetch_news(
-    tickers: list[str],
+    ticker: str,
     relevance_threshold: float = _DEFAULT_RELEVANCE_THRESHOLD,
 ) -> list[NewsItem]:
     """Core Yahoo Finance RSS fetch logic."""
-    tickers_upper = [t.upper() for t in tickers]
+    ticker_upper = ticker.upper()
     items: list[NewsItem] = []
 
-    for i, ticker in enumerate(tickers_upper):
-        if i > 0:
-            time.sleep(0.5)
+    logger.info("Fetching news for ticker: %s", ticker_upper)
 
-        logger.info("Fetching news for ticker: %s", ticker)
+    feed_url = f"{_YAHOO_RSS_ENDPOINT}?ticker={ticker_upper}"
 
-        feed_url = f"{_YAHOO_RSS_ENDPOINT}?ticker={ticker}"
+    try:
+        response = requests.get(feed_url, timeout=_REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.error("Request failed for %s: %s", ticker_upper, exc)
+        return []
 
-        try:
-            response = requests.get(feed_url, timeout=_REQUEST_TIMEOUT)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            logger.error("Request failed for %s: %s", ticker, exc)
+    feed = feedparser.parse(response.content)
+
+    if not feed.entries:
+        logger.info("No articles found for ticker %s.", ticker_upper)
+        return []
+
+    logger.info("Received %d raw items for %s.", len(feed.entries), ticker_upper)
+
+    for entry in feed.entries:
+        article = _parse_raw_article(entry)
+        if article is None:
             continue
+        items.extend(_extract_ticker_items(article, ticker_upper, relevance_threshold))
 
-        feed = feedparser.parse(response.content)
-
-        if not feed.entries:
-            logger.info("No articles found for ticker %s.", ticker)
-            continue
-
-        logger.info("Received %d raw items for %s.", len(feed.entries), ticker)
-
-        for entry in feed.entries:
-            article = _parse_raw_article(entry)
-            if article is None:
-                continue
-            items.extend(_extract_ticker_items(entry, article, [ticker], relevance_threshold))
-
-    logger.info("%d items passed relevance filter for %s.", len(items), ",".join(tickers_upper))
+    logger.info("%d items passed relevance filter for %s.", len(items), ticker_upper)
     return items
 
 
@@ -102,15 +99,15 @@ def _fetch_news(
 # ---------------------------------------------------------------------------
 
 
-def _parse_raw_article(entry) -> tuple[str, str, str, SentimentLabel | None, datetime] | None:
+def _parse_raw_article(entry) -> tuple[str, str, str | None, datetime] | None:
     """Parse and validate the shared fields of a raw RSS entry.
 
-    Returns a tuple of (headline, url, summary, sentiment_label, published_dt)
+    Returns a tuple of (headline, url, summary, published_dt)
     or None if any essential field is missing or unparseable.
     """
     headline = entry.get("title", "")
     url = entry.get("link", "")
-    summary = entry.get("summary", "")
+    summary = entry.get("summary") or None
 
     # feedparser normalises timestamps to UTC in entry.published_parsed.
     published_parsed = entry.get("published_parsed")
@@ -124,54 +121,54 @@ def _parse_raw_article(entry) -> tuple[str, str, str, SentimentLabel | None, dat
         logger.warning("Missing URL for article: %r — skipping.", headline)
         return None
 
-    # Yahoo Finance RSS provides no sentiment labels.
-    return headline, url, summary, None, published_dt
+    return headline, url, summary, published_dt
 
 
 def _extract_ticker_items(
-    entry,
-    article: tuple[str, str, str, SentimentLabel | None, datetime],
-    tickers: list[str],
+    article: tuple[str, str, str | None, datetime],
+    ticker: str,
     relevance_threshold: float,
 ) -> list[NewsItem]:
-    """Build a NewsItem for each ticker in *tickers* that passes the relevance filter.
+    """Build a NewsItem for *ticker* when it passes the relevance filter.
 
     Since Yahoo Finance RSS does not supply ticker-level relevance scores,
     relevance is approximated via ticker mention in the headline and summary.
     """
-    headline, url, summary, sentiment_label, published_dt = article
+    headline, url, summary, published_dt = article
     items: list[NewsItem] = []
 
-    article_text = f"{headline} {summary}".lower()
+    try:
+        validated_url: HttpUrl = _HTTP_URL_ADAPTER.validate_python(url)
+    except ValidationError:
+        logger.warning("Invalid URL for article: %r — skipping.", headline)
+        return []
 
-    for ticker in tickers:
-        ticker_lower = ticker.lower()
+    article_text = f"{headline} {summary or ''}".lower()
+    ticker_lower = ticker.lower()
 
-        if ticker_lower in headline.lower():
-            relevance = 0.8
-        elif ticker_lower in article_text:
-            relevance = 0.5
-        else:
-            relevance = 0.1
+    if ticker_lower in headline.lower():
+        relevance = 0.8
+    elif ticker_lower in article_text:
+        relevance = 0.5
+    else:
+        relevance = 0.1
 
-        if relevance < relevance_threshold:
-            logger.debug(
-                "Skipping low-relevance article (%.2f) for %s: %s",
-                relevance, ticker, headline,
-            )
-            continue
-
-        items.append(
-            NewsItem(
-                ticker=ticker,
-                headline=headline,
-                url=url,
-                summary=summary,
-                provider_sentiment=None,  # Yahoo RSS provides no sentiment.
-                published=published_dt,
-                relevance_score=relevance,
-                source_provider=_SOURCE_PROVIDER,
-            )
+    if relevance < relevance_threshold:
+        logger.debug(
+            "Skipping low-relevance article (%.2f) for %s: %s",
+            relevance, ticker, headline,
         )
+        return []
+
+    items.append(
+        NewsItem(
+            ticker=ticker,
+            headline=headline,
+            url=validated_url,
+            summary=summary,
+            published=published_dt,
+            source_provider=SourceProvider.YAHOO_RSS,
+        )
+    )
 
     return items

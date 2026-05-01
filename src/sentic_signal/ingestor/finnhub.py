@@ -3,34 +3,33 @@
 Implements the BaseIngestor protocol for the Finnhub Company News API.
 
 Finnhub's /company-news endpoint returns articles for a single ticker over a
-date range. The free tier allows 60 API requests per minute. Unlike Alpha
-Vantage, Finnhub does not supply sentiment scores, so `provider_sentiment` is
-always None. The `sentic_sentiment` field will be populated downstream by the
-analyst worker.
+date range. The free tier allows 60 API requests per minute. Finnhub does not
+supply sentiment scores, so `provider_sentiment` is always None for items from
+this source. Sentiment analysis is performed downstream by the war room agents
+in sentic-analyst.
 
 Docs: https://finnhub.io/docs/api/company-news
 """
 
 import logging
-import time
 from datetime import UTC, datetime, timedelta
 
 import requests
+from pydantic import HttpUrl, TypeAdapter, ValidationError
 
-from sentic_signal.models import NewsItem
+from sentic_signal.models import NewsItem, SourceProvider
 
 logger = logging.getLogger(__name__)
 
 _FINNHUB_ENDPOINT = "https://finnhub.io/api/v1/company-news"
 _REQUEST_TIMEOUT = 15  # seconds
-_INTER_REQUEST_DELAY = 1.1  # seconds — stay well under 60 req/min free limit
-_SOURCE_PROVIDER = "finnhub"
+_HTTP_URL_ADAPTER: TypeAdapter[HttpUrl] = TypeAdapter(HttpUrl)
 
 
 class FinnhubIngestor:
     """News provider adapter for the Finnhub Company News API."""
 
-    source_provider: str = _SOURCE_PROVIDER
+    source_provider: SourceProvider = SourceProvider.FINNHUB
 
     def __init__(self, api_key: str) -> None:
         if not api_key:
@@ -39,20 +38,20 @@ class FinnhubIngestor:
 
     def fetch_news(
         self,
-        tickers: list[str],
+        ticker: str,
         relevance_threshold: float = 0.0,  # Finnhub has no relevance score; accept all
     ) -> list[NewsItem]:
-        """Fetch and normalise news for *tickers* from Finnhub.
+        """Fetch and normalise news for *ticker* from Finnhub.
 
         Args:
-            tickers:             Uppercase ticker symbols (e.g. ["AAPL", "MSFT"]).
+            ticker:              Uppercase ticker symbol (e.g. "AAPL").
             relevance_threshold: Ignored for Finnhub (no relevance scores supplied).
                                  Kept for interface compatibility.
 
         Returns:
             Normalised list of NewsItem objects.
         """
-        return _fetch_news(tickers, self._api_key)
+        return _fetch_news(ticker, self._api_key)
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +59,9 @@ class FinnhubIngestor:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_news(tickers: list[str], api_key: str) -> list[NewsItem]:
-    """Core Finnhub fetch logic — one request per ticker."""
-    tickers_upper = [t.upper() for t in tickers]
+def _fetch_news(ticker: str, api_key: str) -> list[NewsItem]:
+    """Core Finnhub fetch logic for a single ticker."""
+    ticker_upper = ticker.upper()
     items: list[NewsItem] = []
 
     # Fetch the last 7 days. Lookback filtering to the configured window
@@ -72,40 +71,42 @@ def _fetch_news(tickers: list[str], api_key: str) -> list[NewsItem]:
     date_from = from_date.strftime("%Y-%m-%d")
     date_to = today.strftime("%Y-%m-%d")
 
-    for i, ticker in enumerate(tickers_upper):
-        if i > 0:
-            time.sleep(_INTER_REQUEST_DELAY)
+    logger.info("Fetching Finnhub news for ticker: %s (%s to %s)", ticker_upper, date_from, date_to)
 
-        logger.info("Fetching Finnhub news for ticker: %s (%s to %s)", ticker, date_from, date_to)
+    params = {
+        "symbol": ticker_upper,
+        "from": date_from,
+        "to": date_to,
+        "token": api_key.strip(),
+    }
 
-        params = {
-            "symbol": ticker,
-            "from": date_from,
-            "to": date_to,
-            "token": api_key.strip(),
-        }
+    try:
+        response = requests.get(_FINNHUB_ENDPOINT, params=params, timeout=_REQUEST_TIMEOUT)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        # Log only the exception type — the raw exception message may embed the
+        # full request URL, which carries the API key as a query parameter.
+        logger.error(
+            "Finnhub request failed for %s (%s). Check FINNHUB_API_KEY and network.",
+            ticker_upper,
+            type(exc).__name__,
+        )
+        return []
 
-        try:
-            response = requests.get(_FINNHUB_ENDPOINT, params=params, timeout=_REQUEST_TIMEOUT)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            logger.error("Finnhub request failed for %s: %s", ticker, exc)
-            continue
+    raw_articles: list[dict] = response.json()
 
-        raw_articles: list[dict] = response.json()
+    if not isinstance(raw_articles, list):
+        logger.warning("Unexpected Finnhub response for %s: %s", ticker_upper, raw_articles)
+        return []
 
-        if not isinstance(raw_articles, list):
-            logger.warning("Unexpected Finnhub response for %s: %s", ticker, raw_articles)
-            continue
+    logger.info("Received %d raw Finnhub items for %s.", len(raw_articles), ticker_upper)
 
-        logger.info("Received %d raw Finnhub items for %s.", len(raw_articles), ticker)
+    for raw in raw_articles:
+        item = _parse_article(raw, ticker_upper)
+        if item is not None:
+            items.append(item)
 
-        for raw in raw_articles:
-            item = _parse_article(raw, ticker)
-            if item is not None:
-                items.append(item)
-
-    logger.info("%d Finnhub items fetched for %s.", len(items), ",".join(tickers_upper))
+    logger.info("%d Finnhub items fetched for %s.", len(items), ticker_upper)
     return items
 
 
@@ -123,6 +124,12 @@ def _parse_article(raw: dict, ticker: str) -> NewsItem | None:
         return None
 
     try:
+        validated_url: HttpUrl = _HTTP_URL_ADAPTER.validate_python(url)
+    except ValidationError:
+        logger.warning("Invalid Finnhub URL for article: %r — skipping.", headline)
+        return None
+
+    try:
         published = datetime.fromtimestamp(int(unix_ts), tz=UTC)
     except (ValueError, OSError, OverflowError):
         logger.warning("Invalid Finnhub timestamp '%s' for article: %s", unix_ts, headline)
@@ -131,10 +138,8 @@ def _parse_article(raw: dict, ticker: str) -> NewsItem | None:
     return NewsItem(
         ticker=ticker,
         headline=headline,
-        url=url,
+        url=validated_url,
         published=published,
-        summary=(raw.get("summary") or "").strip(),
-        source_provider=_SOURCE_PROVIDER,
-        provider_sentiment=None,   # Finnhub does not supply sentiment
-        sentic_sentiment=None,     # Populated by analyst worker
+        summary=(raw.get("summary") or "").strip() or None,
+        source_provider=SourceProvider.FINNHUB,
     )

@@ -8,15 +8,17 @@ image:
   pullPolicy: IfNotPresent
 
 config:
-  tickers: "TSLA,JNJ,NEE,XOM"
+  provider: "yahoo_rss" # One of: alpha_vantage, finnhub, yahoo_rss
+  ticker: "TSLA"
   newsLookbackMinutes: "10080"
   newsRelevanceThreshold: "0.1"
-  yahooRssEnabled: "true"
 
 rabbitmq:
   host: "rabbitmq" # Service name in k8s; overridden to "localhost" in .env
   port: "5672"
   queue: "raw-news"
+  username: "default_user"  # Operator-generated default; override per-environment
+  credentialsSecret: "definition-default-user"  # Secret name created by RabbitMQ operator
 
 schedule: "0 */2 * * *"
 

@@ -41,12 +41,48 @@ jobs:
             --cov-report=term-missing
 
   # ---------------------------------------------------------------------------
+  # Helm lint and template render for base values and all provider overlays.
+  # Catches chart regressions and validates that secrets are correctly scoped
+  # per provider before any image push or deployment.
+  # ---------------------------------------------------------------------------
+  helm-lint:
+    name: Helm Lint & Render
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        overlay:
+          - name: yahoo_rss (base)
+            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml"
+          - name: alpha_vantage
+            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml -f deploy/sentic-signal-chart/values-alpha-vantage.yaml"
+          - name: finnhub
+            files: "-f deploy/sentic-signal-chart/values.yaml -f deploy/sentic-signal-chart/values-dev.yaml -f deploy/sentic-signal-chart/values-finnhub.yaml"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint (${{ matrix.overlay.name }})
+        run: |
+          helm lint deploy/sentic-signal-chart \
+            ${{ matrix.overlay.files }} \
+            --strict
+
+      - name: Helm template render (${{ matrix.overlay.name }})
+        run: |
+          helm template sentic-signal deploy/sentic-signal-chart \
+            ${{ matrix.overlay.files }} \
+            --debug > /dev/null
+
+  # ---------------------------------------------------------------------------
   # Build image, scan for vulnerabilities, push to GHCR.
-  # Only runs on push to main after tests pass.
+  # Only runs on push to main after tests AND helm-lint pass.
   # ---------------------------------------------------------------------------
   build-and-push:
     name: Build & Push
-    needs: test
+    needs: [test, helm-lint]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
