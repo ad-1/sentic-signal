@@ -1,39 +1,20 @@
-# Multi-stage Dockerfile for Sentic-Signal
-FROM python:3.13-slim AS builder
-
-# Set working directory
-WORKDIR /app
-
-# Copy pyproject.toml first for better caching
-COPY pyproject.toml ./
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install production dependencies only — dev extras (pytest, coverage) must
-# not be included in the runtime image.
-RUN pip install --upgrade pip && pip install --no-cache-dir -e "."
-
-# Final stage
 FROM python:3.13-slim
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Create non-root user for security
+# Create non-root user for runtime security.
 RUN useradd --create-home --shell /bin/bash appuser
+
+# Copy only files required to build and run the package.
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# Install production package (non-editable).
+RUN pip install --upgrade pip && pip install --no-cache-dir .
+
 USER appuser
-WORKDIR /home/appuser
 
-# Copy the installed dependencies and source code from builder stage
-COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=builder /app/src /app/src
-
-# Set environment variables
-ENV PYTHONPATH=/app/src
-ENV PATH=/home/appuser/.local/bin:$PATH
-
-# Use the installed entry point script
 CMD ["sentic-signal"]
