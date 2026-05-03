@@ -69,7 +69,6 @@ sentic-signal/
 |  |- sentic-signal-chart/
 |  |  |- Chart.yaml
 |  |  |- values.yaml
-|  |  |- values-dev.yaml
 |  |  |- values-alpha-vantage.yaml
 |  |  |- values-finnhub.yaml
 |  |  |- templates/
