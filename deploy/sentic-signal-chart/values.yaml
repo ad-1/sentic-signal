@@ -4,7 +4,7 @@
 
 image:
   repository: ghcr.io/ad-1/sentic-signal
-  tag: "sha-d6d94e6"
+  tag: "sha-7b22fc6"
   pullPolicy: IfNotPresent
 
 config:
